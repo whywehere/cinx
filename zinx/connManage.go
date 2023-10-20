@@ -3,7 +3,7 @@ package zinx
 import (
 	"cinx/zinx/ziface"
 	"errors"
-	"fmt"
+	"log/slog"
 	"sync"
 )
 
@@ -27,10 +27,9 @@ func (connMgr *ConnManager) Add(conn ziface.IConnection) {
 	connMgr.connLock.Lock()
 	defer connMgr.connLock.Unlock()
 
-	//将conn连接添加到ConnMananger中
+	//将conn连接添加到ConnManager中
 	connMgr.connections[conn.GetConnID()] = conn
-
-	fmt.Println("connection add to ConnManager successfully: conn num = ", connMgr.Len())
+	slog.Info("[cinx] Connection is added to ConnManager ", "ConnNum", connMgr.Len())
 }
 
 // 删除连接
@@ -41,11 +40,10 @@ func (connMgr *ConnManager) Remove(conn ziface.IConnection) {
 
 	//删除连接信息
 	delete(connMgr.connections, conn.GetConnID())
-
-	fmt.Println("connection Remove ConnID=", conn.GetConnID(), " successfully: conn num = ", connMgr.Len())
+	slog.Info("[cinx] Connection is removed from ConnManager", "conn", conn.GetConnID())
 }
 
-// 利用ConnID获取链接
+// Get 利用ConnID获取链接
 func (connMgr *ConnManager) Get(connID uint32) (ziface.IConnection, error) {
 	//保护共享资源Map 加读锁
 	connMgr.connLock.RLock()
@@ -58,12 +56,12 @@ func (connMgr *ConnManager) Get(connID uint32) (ziface.IConnection, error) {
 	}
 }
 
-// 获取当前连接
+// Len 获取当前连接数量
 func (connMgr *ConnManager) Len() int {
 	return len(connMgr.connections)
 }
 
-// 清除并停止所有连接
+// ClearConn 清除并停止所有连接
 func (connMgr *ConnManager) ClearConn() {
 	//保护共享资源Map 加写锁
 	connMgr.connLock.Lock()
@@ -76,6 +74,5 @@ func (connMgr *ConnManager) ClearConn() {
 		//删除
 		delete(connMgr.connections, connID)
 	}
-
-	fmt.Println("Clear All Connections successfully: conn num = ", connMgr.Len())
+	slog.Info("[cinx] All connections are removed")
 }

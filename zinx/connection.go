@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 )
@@ -19,13 +20,13 @@ type Connection struct {
 	//当前连接的ID 也可以称作为SessionID，ID全局唯一
 	ConnID uint32
 	//当前连接的关闭状态
-	isClosed bool
+	isClosed *sync.Once
 
 	//消息管理MsgId和对应处理方法的消息管理模块
 	MsgHandler ziface.IMsgHandle
 
 	//告知该链接已经退出/停止的channel
-	ExitBuffChan chan bool
+	ExitBuffChan chan struct{}
 
 	msgChan chan []byte
 	//有关冲管道，用于读、写两个goroutine之间的消息通信
@@ -44,9 +45,9 @@ func NewConnection(server ziface.IServer, conn *net.TCPConn, connID uint32, msgH
 		TcpServer:    server,
 		Conn:         conn,
 		ConnID:       connID,
-		isClosed:     false,
+		isClosed:     nil,
 		MsgHandler:   msgHandler,
-		ExitBuffChan: make(chan bool, 1),
+		ExitBuffChan: make(chan struct{}),
 		msgChan:      make(chan []byte),                       //msgChan初始化
 		msgBuffChan:  make(chan []byte, global.MaxMsgChanLen), //不要忘记初始化
 		property:     make(map[string]interface{}),            //对链接属性map初始化
@@ -59,7 +60,7 @@ func NewConnection(server ziface.IServer, conn *net.TCPConn, connID uint32, msgH
 
 // StartReader 处理conn读数据的Goroutine
 func (c *Connection) StartReader() {
-	fmt.Println("Reader Goroutine is  running")
+	slog.Info("[cinx] Server Reader Goroutine is running...")
 	defer fmt.Println(c.RemoteAddr().String(), " conn reader exit!")
 
 	defer c.Stop()
@@ -71,15 +72,15 @@ func (c *Connection) StartReader() {
 		//获得message的头部消息
 		headData := make([]byte, dp.GetHeadLen())
 		if _, err := io.ReadFull(c.GetTCPConnection(), headData); err != nil {
-			fmt.Println("read msg head error ", err)
-			c.ExitBuffChan <- true
+			slog.Error("[cinx] read message ", "error", err)
+			c.ExitBuffChan <- struct{}{}
 			continue
 		}
 
 		msg, err := dp.Unpack(headData)
 		if err != nil {
-			fmt.Println("unpack error ", err)
-			c.ExitBuffChan <- true
+			slog.Error("[cinx] unpack ", "error", err)
+			c.ExitBuffChan <- struct{}{}
 			continue
 		}
 
@@ -87,8 +88,8 @@ func (c *Connection) StartReader() {
 		if msg.GetDataLen() > 0 {
 			data = make([]byte, msg.GetDataLen())
 			if _, err := io.ReadFull(c.GetTCPConnection(), data); err != nil {
-				fmt.Println("read msg data error ", err)
-				c.ExitBuffChan <- true
+				slog.Error("[cinx] read message ", "error", err)
+				c.ExitBuffChan <- struct{}{}
 				continue
 			}
 		}
@@ -127,20 +128,18 @@ func (c *Connection) Start() {
 // Stop 停止连接，结束当前连接状态M
 func (c *Connection) Stop() {
 	//1. 如果当前链接已经关闭
-	if c.isClosed == true {
-		return
-	}
-	c.isClosed = true
-
-	c.TcpServer.CallOnConnStop(c)
-	// 关闭socket链接
-	c.Conn.Close()
-	//通知从缓冲队列读数据的业务，该链接已经关闭
-	c.ExitBuffChan <- true
-	c.TcpServer.GetConnMgr().Remove(c) //删除conn从ConnManager中
-	//关闭该链接全部管道
-	defer close(c.ExitBuffChan)
-	defer close(c.msgChan)
+	c.isClosed.Do(
+		func() {
+			c.TcpServer.CallOnConnStop(c)
+			// 关闭socket链接
+			c.Conn.Close()
+			//通知从缓冲队列读数据的业务，该链接已经关闭
+			c.ExitBuffChan <- struct{}{}
+			c.TcpServer.GetConnMgr().Remove(c) //删除conn从ConnManager中
+			//关闭该链接全部管道
+			close(c.ExitBuffChan)
+			close(c.msgChan)
+		})
 }
 
 // GetTCPConnection 从当前连接获取原始的socket TCPConn
@@ -160,15 +159,12 @@ func (c *Connection) RemoteAddr() net.Addr {
 
 // SendMsg  直接将Message数据发送数据给远程的TCP客户端
 func (c *Connection) SendMsg(msgId uint32, data []byte) error {
-	if c.isClosed == true {
-		return errors.New("connection closed when send msg")
-	}
 
 	//将data封包，并且发送
 	dp := NewDataPack()
 	msg, err := dp.Pack(NewMsgPackage(msgId, data))
 	if err != nil {
-		fmt.Println("Pack error msg id = ", msgId)
+		slog.Error("[cinx] Pack ", "error", err)
 		return errors.New("Pack error msg ")
 	}
 
@@ -213,14 +209,12 @@ func (c *Connection) StartWriter() {
 }
 
 func (c *Connection) SendBuffMsg(msgId uint32, data []byte) error {
-	if c.isClosed == true {
-		return errors.New("Connection closed when send buff msg")
-	}
+
 	//将data封包，并且发送
 	dp := NewDataPack()
 	msg, err := dp.Pack(NewMsgPackage(msgId, data))
 	if err != nil {
-		fmt.Println("Pack error msg id = ", msgId)
+		slog.Error("[cinx] Pack ", "error", err)
 		return errors.New("Pack error msg ")
 	}
 

@@ -6,7 +6,10 @@ import (
 	"cinx/zinx/ziface"
 	"encoding/binary"
 	"errors"
+	"io"
 )
+
+const HeaderLen = 8
 
 type DataPack struct{}
 
@@ -21,27 +24,31 @@ func (dp *DataPack) GetHeadLen() uint32 {
 	return 8
 }
 
+func writeBinary(dataBuffer io.Writer, data interface{}) error {
+	if err := binary.Write(dataBuffer, binary.LittleEndian, data); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Pack 封包方法(压缩数据)
 func (dp *DataPack) Pack(msg ziface.IMessage) ([]byte, error) {
-	//创建一个存放bytes字节的缓冲
 	dataBuffer := bytes.NewBuffer([]byte{})
 
-	//将dataLen写入dataBuffer
-	if err := binary.Write(dataBuffer, binary.LittleEndian, msg.GetDataLen()); err != nil {
+	if err := writeBinary(dataBuffer, msg.GetDataLen()); err != nil {
 		return nil, err
 	}
 
-	//将msgID写入dataBuffer
-	if err := binary.Write(dataBuffer, binary.LittleEndian, msg.GetMsgId()); err != nil {
+	if err := writeBinary(dataBuffer, msg.GetMsgId()); err != nil {
 		return nil, err
 	}
 
-	//将data写入dataBuffer
-	if err := binary.Write(dataBuffer, binary.LittleEndian, msg.GetData()); err != nil {
+	if err := writeBinary(dataBuffer, msg.GetData()); err != nil {
 		return nil, err
 	}
 
 	return dataBuffer.Bytes(), nil
+
 }
 
 // Unpack 拆包方法(解压数据)
